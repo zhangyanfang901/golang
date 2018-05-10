@@ -12,38 +12,52 @@ import (
     "log"
     "os/exec"
     "os"
+    "sort"
 )
 
 var debugLog *log.Logger
 var logFile *os.File
 
 type MemStatus struct {
-    All  uint64 `json:"all"`
-    Used uint64 `json:"used"`
-    Free uint64 `json:"free"`
-    Self uint64 `json:"self"`
+    All  float64 `json:"all"`
+    Used float64 `json:"used"`
+    Free float64 `json:"free"`
+    Self float64 `json:"self"`
 }
 
 type Process struct {
-    pid int
-    cpu float64
-    mem float64
+    pid  int
+    name string
+    cpu  float64
+    mem  float64
 }
+type newProcesslist []*Process  //供Process结构按照cpu排序使用
+//调用标准库的sort.Sort必须要先实现Len(),Less(),Swap() 三个方法
+func (P newProcesslist) Len() int {
+	return len(P)
+}
+func (P newProcesslist) Less(i, j int) bool {
+	return P[i].cpu > P[j].cpu
+}
+func (P newProcesslist) Swap(i, j int) {
+	P[i], P[j] = P[j], P[i]
+}
+
 
 func MemStat() MemStatus {
     //自身占用
     memStat := new(runtime.MemStats)
     runtime.ReadMemStats(memStat)
     mem := MemStatus{}
-    mem.Self = memStat.Alloc
+    mem.Self = float64(memStat.Alloc)/float64(1024*1024)
 
     //系统占用,仅linux/mac下有效
     //system memory usage
     sysInfo := new(syscall.Sysinfo_t)
     err := syscall.Sysinfo(sysInfo)
     if err == nil {
-        mem.All = sysInfo.Totalram //* uint64(syscall.Getpagesize())
-        mem.Free = sysInfo.Freeram //* uint64(syscall.Getpagesize())
+        mem.All = float64(sysInfo.Totalram)/float64(1024*1024) //* uint64(syscall.Getpagesize())
+        mem.Free = float64(sysInfo.Freeram)/float64(1024*1024) //* uint64(syscall.Getpagesize())
         mem.Used = mem.All - mem.Free
     }
     return mem
@@ -112,10 +126,16 @@ func getProcessInfo() {
         if err!=nil {
             debugLog.Fatal(err)
         }
-        processes = append(processes, &Process{pid, cpu, mem})
+
+        name := strings.Replace(ft[10], "\n", "", -1)  
+        processes = append(processes, &Process{pid, name, cpu, mem})
     }
-    for _, p := range(processes) {
-        debugLog.Printf("Process %8d takes %f%% of the CPU and  %f%% of the MEM\n", p.pid, p.cpu, p.mem)
+    //按进程的cpu使用率进行排序
+    sort.Sort(newProcesslist(processes))  //调用标准库的sort.Sort必须要先实现Len(),Less(),Swap() 三个方法.
+    for index, p := range(processes) {
+        if index < 5{
+            debugLog.Printf("Process %6d  **%25s**  takes %f%% of the CPU and  %f%% of the MEM\n", p.pid, p.name, p.cpu, p.mem)
+        }
     }
 }
 
@@ -127,7 +147,7 @@ func init()  {
     if err != nil {
         log.Fatalln("open file error")
     }
-    debugLog = log.New(logFile,"[Info]",log.Llongfile)
+    debugLog = log.New(logFile,"[Info]",log.LstdFlags)
     debugLog.Println("A Info message here")
 }
 
@@ -136,13 +156,15 @@ func main() {
     //defer logFile.Close()
     for{
 
+        //显示内存信息
         debugLog.Println("\n********************************************************************************")  
         debugLog.Println(time.Now().Format("2006-01-02 15:04:05"))  
         memInfo := MemStat()
-        debugLog.Printf("\n %c[1;40;32m%s%c[0m\n\n", 0x1B, "-------------------------内存相关信息-------------------------：", 0x1B)
+        debugLog.Printf("\n %c[1;40;32m%s%c[0m\n\n", 0x1B, "---------------------内存相关信息(单位M)----------------------：", 0x1B)
         debugLog.Printf("%+v", memInfo)
         debugLog.Printf("\n %c[1;40;32m%s%c[0m\n\n", 0x1B, "-------------------------------------------------------------：", 0x1B)
 
+        //显示CPU信息
         idle0, total0 := getCPUSample()
         time.Sleep(3 * time.Second)
         idle1, total1 := getCPUSample()
@@ -155,11 +177,12 @@ func main() {
         debugLog.Printf("CPU usage is %f%% [busy: %f, total: %f]", cpuUsage, totalTicks-idleTicks, totalTicks)
         debugLog.Printf("\n %c[1;40;33m%s%c[0m\n\n", 0x1B, "-------------------------------------------------------------：", 0x1B)
 
-        debugLog.Printf("\n %c[1;40;34m%s%c[0m\n\n", 0x1B, "-------------------------各进程相关信息-----------------------：", 0x1B)
+        //显示各进程信息
+        debugLog.Printf("\n %c[1;40;34m%s%c[0m\n\n", 0x1B, "-------------------------占用CPU较高进程-----------------------：", 0x1B)
         getProcessInfo()
         debugLog.Printf("\n %c[1;40;34m%s%c[0m\n\n", 0x1B, "--------------------------------------------------------------：", 0x1B)
 
-        time.Sleep(6 * time.Second)
+        time.Sleep(10 * time.Second)
     }
 
     
